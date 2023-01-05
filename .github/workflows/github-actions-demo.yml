@@ -1,0 +1,247 @@
+name: 'Docker-build-push-snyk-clean'
+
+description: 'Build docker,test ,push to Artifactory, clean'
+
+ 
+
+inputs:
+
+  branch:
+
+    required: true
+
+  service:
+
+    required: true
+
+  tag:
+
+    required: true
+
+  snyk-command:
+
+    required: true
+
+  github_sha:
+
+    required: true
+
+  owner:
+
+    required: true
+
+  registry:
+
+    required: true
+
+  registry2:
+
+    required: true
+
+ 
+
+  # Secrets
+
+  github-token:
+
+    required: true
+
+  old_rt_user:
+
+    required: false
+
+  old_rt_pass:
+
+    required: false
+
+  snyk-token:
+
+    required: true
+
+  artifactory-user:
+
+    required: true
+
+  artifactory-token:
+
+    required: true
+
+ 
+
+  # Docker
+
+  dockerfile:
+
+    default: '.'
+
+    required: false
+
+  context:
+
+    required: false
+
+  ecr:
+
+    required: false
+
+  ghcr:
+
+    required: false
+
+  docker-args:
+
+    required: false
+
+ 
+
+runs:
+
+  using: "composite"
+
+  steps:
+
+    # Dockerfiles repo
+
+    - name: Checkout files
+
+      uses: actions/checkout@v3
+
+      with:
+
+        repository: ${{ inputs.owner }}/workflow-dockerfiles
+
+        ref: master
+
+        token: ${{ inputs.github-token }}
+
+        path: dockerfiles
+
+   
+
+    # Create tags - Docker Build
+
+    - name: Docker Image Tags
+
+      id: docker-tags
+
+      run: |
+
+        echo "IMAGE=$(echo ${{ inputs.registry }}/osint-dev/${{ inputs.service }}:${{ inputs.tag }})" >> $GITHUB_ENV
+
+        echo "OLD_RT=$(echo ${{ inputs.registry2 }}/${{ inputs.service }}:${{ inputs.tag }})" >> $GITHUB_ENV
+
+      shell: bash
+
+   
+
+    # Login
+
+    - name: 🐸 Login to JFrog 🐸 
+
+      id: docker-login-artifactory
+
+      uses: clbt-fb73af3c/clbt-workflows/login@docker
+
+      with:
+
+        registry: ${{ inputs.registry }}
+
+        username: ${{ inputs.artifactory-user }}
+
+        password: ${{ inputs.artifactory-token }}
+
+ 
+
+    - name: 🐸 Login to JFrog 🐸 
+
+      id: docker-login-OLD-artifactory
+
+      uses: clbt-fb73af3c/clbt-workflows/login@docker
+
+      with:
+
+        registry: docker-dc.dnsk.io
+
+        username: ${{ inputs.old_rt_user }}
+
+        password: ${{ inputs.old_rt_pass }}
+
+ 
+
+    # Docker build
+
+    - name: Set up Docker Buildx
+
+      uses: clbt-fb73af3c/clbt-workflows/setup-buildx@docker
+
+ 
+
+    - name: Build and push
+
+      uses: clbt-fb73af3c/clbt-workflows/build-push@docker
+
+      env:
+
+        BUILDKIT_COLORS: run=123,20,245:error=yellow:cancel=blue:warning=white
+
+      with:
+
+        context: ${{ inputs.context }}
+
+        push: true
+
+        tags: ${{ env.IMAGE }},${{ env.OLD_RT }},${{ env.ECR }}
+
+        cache-from: type=gha
+
+        cache-to: type=gha,mode=max
+
+        file: ${{ inputs.dockerfile }}
+
+        build-args: |
+
+          COMMIT_SHA=${{ inputs.github_sha }}
+
+          BRANCH_NAME=${{ inputs.branch }}
+
+          SERVICE_NAME=${{ inputs.service }}
+
+          SERVICE_VERSION=${{ inputs.tag }}
+
+          ${{ inputs.docker-args }}
+
+     
+
+     - name: Run Snyk to check Docker image for vulnerabilities
+
+      uses: clbt-fb73af3c/clbt-workflows/docker@snyk-actions
+
+      env:
+
+        SNYK_TOKEN: ${{ inputs.snyk-token }}
+
+      with:
+
+        image: ${{ env.IMAGE }}
+
+        command: monitor
+
+        args: --project-name=${{ inputs.service }}
+
+        sarif: false
+
+ 
+
+    - name: Docker Clean
+
+      if: always()
+
+      run: |
+
+        docker system prune -a -f \
+
+        --filter "until=20m" \
+
+        --filter "label!=org.opencontainers.image.source=https://github.com/snyk/snyk-images" || true
+
+      shell: bash
