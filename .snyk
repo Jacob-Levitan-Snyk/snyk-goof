@@ -2,4 +2,4 @@
 ---
 exclude:
     global:
-        - subdir/**
+        # - subdir/**
